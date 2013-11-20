@@ -17,6 +17,7 @@
  *
  */
 
+#include <string.h>
 #include "vdpau_private.h"
 
 VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format, uint32_t width, uint32_t height, VdpOutputSurface  *surface)
@@ -24,7 +25,7 @@ VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	if (!surface)
 		return VDP_STATUS_INVALID_POINTER;
 
-	if (!width || !height)
+	if (!width || !height || width >= 16384 || height >= 16384)
 		return VDP_STATUS_INVALID_SIZE;
 
 	device_ctx_t *dev = handle_get(device);
@@ -41,6 +42,8 @@ VdpStatus vdp_output_surface_create(VdpDevice device, VdpRGBAFormat rgba_format,
 	out->contrast = 1.0;
 	out->saturation = 1.0;
 	out->device = dev;
+	// Do not allocate data yet, we might not need to
+	out->data = NULL;
 
 	int handle = handle_create(out);
 	if (handle == -1)
@@ -108,16 +111,58 @@ VdpStatus vdp_output_surface_put_bits_native(VdpOutputSurface surface, void cons
 	return VDP_STATUS_OK;
 }
 
+static int valid_rect(const VdpRect *rect, const output_surface_ctx_t *out)
+{
+	return rect->x0 <= rect->x1 &&
+	       rect->y0 <= rect->y1 &&
+	       rect->x1 < out->width &&
+	       rect->y1 < out->height;
+}
+
 VdpStatus vdp_output_surface_put_bits_indexed(VdpOutputSurface surface, VdpIndexedFormat source_indexed_format, void const *const *source_data, uint32_t const *source_pitch, VdpRect const *destination_rect, VdpColorTableFormat color_table_format, void const *color_table)
 {
 	output_surface_ctx_t *out = handle_get(surface);
 	if (!out)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
+	if (!valid_rect(destination_rect, out))
+		return VDP_STATUS_INVALID_SIZE;
 
+	if (out->rgba_format != VDP_RGBA_FORMAT_B8G8R8A8 ||
+	    source_indexed_format != VDP_INDEXED_FORMAT_I8A8 ||
+	    color_table_format != VDP_COLOR_TABLE_FORMAT_B8G8R8X8)
+	{
+		VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
+		return VDP_STATUS_OK;
+	}
 
+	if (!out->data)
+		out->data = calloc(out->width * 4, out->height);
+	if (!out->data)
+		return VDP_STATUS_RESOURCES;
 
+	const uint32_t *palette = color_table;
+	uint32_t w = destination_rect->x1 - destination_rect->x0;
+	uint32_t h = destination_rect->y1 - destination_rect->y0;
+	uint32_t *dst = out->data;
+	dst += destination_rect->y0 * out->width + destination_rect->x0;
+	uint32_t dst_step = out->width - w;
+	const uint8_t *src = source_data[0];
+	if (source_pitch[0] < 2 * w)
+		return VDP_STATUS_INVALID_SIZE;
+	uint32_t src_step = source_pitch[0] - 2*w;
+	uint32_t x, y;
+	for (y = 0; y < h; y++)
+	{
+		for (x = 0; x < w; x++)
+		{
+			*dst = palette[*src++] & 0x00ffffffu;
+			*dst++ |= *src++ << 24;
+		}
+		src += src_step;
+		dst += dst_step;
+	}
+	out->data_clear = 0;
 	return VDP_STATUS_OK;
 }
 
@@ -140,14 +185,58 @@ VdpStatus vdp_output_surface_render_output_surface(VdpOutputSurface destination_
 	if (!out)
 		return VDP_STATUS_INVALID_HANDLE;
 
+	if (source_surface == VDP_INVALID_HANDLE)
+	{
+		// for now assume destination_rect == NULL and
+		// always clear the whole surface
+		if (out->data)
+		{
+			free(out->data);
+			out->data = NULL;
+		}
+		return VDP_STATUS_OK;
+	}
+
 	output_surface_ctx_t *in = handle_get(source_surface);
 	if (!in)
 		return VDP_STATUS_INVALID_HANDLE;
 
-	VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
+	if (!valid_rect(source_rect, in) ||
+	    !valid_rect(destination_rect, out))
+		return VDP_STATUS_INVALID_SIZE;
 
+	if (out->rgba_format != VDP_RGBA_FORMAT_B8G8R8A8 ||
+	    !in->data)
+	{
+		VDPAU_DBG_ONCE("%s called but unimplemented!", __func__);
+		return VDP_STATUS_OK;
+	}
 
+	if (out->data && out->data_clear)
+		memset(out->data, 0, out->width * 4 * out->height);
+	if (!out->data)
+		out->data = calloc(out->width * 4, out->height);
+	if (!out->data)
+		return VDP_STATUS_RESOURCES;
 
+	uint32_t w = destination_rect->x1 - destination_rect->x0;
+	uint32_t ws = source_rect->x1 - source_rect->x0;
+	if (ws < w) w = ws;
+	uint32_t h = destination_rect->y1 - destination_rect->y0;
+	uint32_t hs = source_rect->y1 - source_rect->y0;
+	if (hs < h) h = hs;
+	uint32_t *dst = out->data;
+	dst += destination_rect->y0 * out->width + destination_rect->x0;
+	const uint32_t *src = in->data;
+	src += source_rect->y0 * in->width + source_rect->x0;
+	uint32_t y;
+	for (y = 0; y < h; y++)
+	{
+		memcpy(dst, src, w * 4);
+		src += in->width;
+		dst += out->width;
+	}
+	out->data_clear = 0;
 	return VDP_STATUS_OK;
 }
 

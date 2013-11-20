@@ -226,6 +226,26 @@ VdpStatus vdp_presentation_queue_display(VdpPresentationQueue presentation_queue
 	int x,y;
 	XTranslateCoordinates(q->device->display, q->target->drawable, RootWindow(q->device->display, q->device->screen), 0, 0, &x, &y, &c);
 	XClearWindow(q->device->display, q->target->drawable);
+	if (os->data && !os->data_clear)
+	{
+		GC gc = XCreateGC(q->device->display, q->target->drawable, 0, 0);
+		const uint32_t *src = os->data;
+		uint32_t x, y;
+		for (y = 0; y < os->height; y++)
+		{
+			for (x = 0; x < os->width; x++)
+			{
+				uint32_t v = *src++;
+				if ((v >> 24) > 0x80)
+				{
+					XSetForeground(q->device->display, gc, v);
+					XDrawPoint(q->device->display, q->target->drawable, gc, x, y);
+				}
+			}
+		}
+		XFreeGC(q->device->display, gc);
+		XFlush(q->device->display);
+	}
 
 	__disp_layer_info_t layer_info;
 	memset(&layer_info, 0, sizeof(layer_info));

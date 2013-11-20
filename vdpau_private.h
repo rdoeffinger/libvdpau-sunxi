@@ -90,6 +90,8 @@ typedef struct
 	device_ctx_t *device;
 	VdpRGBAFormat rgba_format;
 	uint32_t width, height;
+	int data_clear; // data should be treated as clear
+	uint32_t *data;
 	video_surface_ctx_t *vs;
 	VdpRect video_src_rect, video_dst_rect;
 	int csc_change;

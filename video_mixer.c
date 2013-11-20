@@ -79,6 +79,8 @@ VdpStatus vdp_video_mixer_render(VdpVideoMixer mixer, VdpOutputSurface backgroun
 	if (!os)
 		return VDP_STATUS_INVALID_HANDLE;
 
+	os->data_clear = 1;
+
 	os->vs = handle_get(video_surface_current);
 	if (!(os->vs))
 		return VDP_STATUS_INVALID_HANDLE;
